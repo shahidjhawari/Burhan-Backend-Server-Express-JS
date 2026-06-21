@@ -1,10 +1,8 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const path = require("path");
 const connectDB = require("./config/db");
 
-const authRoutes = require("./routes/authRoutes");
 const questionRoutes = require("./routes/questionRoutes");
 
 // Connect to MongoDB
@@ -17,16 +15,12 @@ app.use(cors()); // allows the Android app and admin panel (different origin) to
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve uploaded images statically, e.g. http://localhost:5000/uploads/16989999-photo.jpg
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
 // Health check
 app.get("/", (req, res) => {
   res.json({ status: "ok", message: "QA App backend is running" });
 });
 
 // Routes
-app.use("/api/auth", authRoutes);
 app.use("/api", questionRoutes); // exposes /api/questions and /api/admin/questions
 
 // 404 handler

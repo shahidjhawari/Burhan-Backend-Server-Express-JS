@@ -1,16 +1,5 @@
-const fs = require("fs");
-const path = require("path");
+const cloudinary = require("../config/cloudinary");
 const Question = require("../models/Question");
-
-// Helper: turn a stored relative image path into a full URL the Android app can load directly
-const withFullImageUrl = (req, questionDoc) => {
-  const q = questionDoc.toObject ? questionDoc.toObject() : questionDoc;
-  const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get("host")}`;
-  return {
-    ...q,
-    image: q.image ? `${baseUrl}${q.image}` : "",
-  };
-};
 
 // @desc    Get all questions (supports ?category=&search=&page=&limit=)
 // @route   GET /api/questions
@@ -41,7 +30,7 @@ const getQuestions = async (req, res) => {
       total,
       page: pageNum,
       pages: Math.ceil(total / limitNum) || 1,
-      data: questions.map((q) => withFullImageUrl(req, q)),
+      data: questions,
     });
   } catch (error) {
     console.error(error);
@@ -58,7 +47,7 @@ const getQuestionById = async (req, res) => {
     if (!question) {
       return res.status(404).json({ message: "Question not found" });
     }
-    res.json(withFullImageUrl(req, question));
+    res.json(question);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Server error while fetching question" });
@@ -67,7 +56,7 @@ const getQuestionById = async (req, res) => {
 
 // @desc    Create a new question (with optional image)
 // @route   POST /api/admin/questions
-// @access  Private (admin only)
+// @access  Public (no login)
 const createQuestion = async (req, res) => {
   try {
     const { question, answer, reference, category } = req.body;
@@ -76,17 +65,22 @@ const createQuestion = async (req, res) => {
       return res.status(400).json({ message: "Question and answer fields are required" });
     }
 
-    const imagePath = req.file ? `/uploads/${req.file.filename}` : "";
+    // multer-storage-cloudinary already uploaded the file to Cloudinary by
+    // this point. req.file.path is the full secure_url, req.file.filename
+    // is the public_id we need later to delete the image.
+    const image = req.file ? req.file.path : "";
+    const imagePublicId = req.file ? req.file.filename : "";
 
     const newQuestion = await Question.create({
       question,
       answer,
       reference,
       category,
-      image: imagePath,
+      image,
+      imagePublicId,
     });
 
-    res.status(201).json(withFullImageUrl(req, newQuestion));
+    res.status(201).json(newQuestion);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Server error while creating question" });
@@ -95,7 +89,7 @@ const createQuestion = async (req, res) => {
 
 // @desc    Update an existing question (optionally replace image)
 // @route   PUT /api/admin/questions/:id
-// @access  Private (admin only)
+// @access  Public (no login)
 const updateQuestion = async (req, res) => {
   try {
     const existing = await Question.findById(req.params.id);
@@ -110,19 +104,21 @@ const updateQuestion = async (req, res) => {
     if (reference !== undefined) existing.reference = reference;
     if (category !== undefined) existing.category = category;
 
-    // If a new image was uploaded, replace the old one and delete the old file
+    // If a new image was uploaded, delete the old one from Cloudinary first
     if (req.file) {
-      if (existing.image) {
-        const oldPath = path.join(__dirname, "..", existing.image);
-        fs.unlink(oldPath, (err) => {
-          if (err && err.code !== "ENOENT") console.error("Failed to delete old image:", err.message);
-        });
+      if (existing.imagePublicId) {
+        try {
+          await cloudinary.uploader.destroy(existing.imagePublicId);
+        } catch (err) {
+          console.error("Failed to delete old Cloudinary image:", err.message);
+        }
       }
-      existing.image = `/uploads/${req.file.filename}`;
+      existing.image = req.file.path;
+      existing.imagePublicId = req.file.filename;
     }
 
     const updated = await existing.save();
-    res.json(withFullImageUrl(req, updated));
+    res.json(updated);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Server error while updating question" });
@@ -131,7 +127,7 @@ const updateQuestion = async (req, res) => {
 
 // @desc    Delete a question
 // @route   DELETE /api/admin/questions/:id
-// @access  Private (admin only)
+// @access  Public (no login)
 const deleteQuestion = async (req, res) => {
   try {
     const question = await Question.findById(req.params.id);
@@ -139,11 +135,12 @@ const deleteQuestion = async (req, res) => {
       return res.status(404).json({ message: "Question not found" });
     }
 
-    if (question.image) {
-      const imgPath = path.join(__dirname, "..", question.image);
-      fs.unlink(imgPath, (err) => {
-        if (err && err.code !== "ENOENT") console.error("Failed to delete image:", err.message);
-      });
+    if (question.imagePublicId) {
+      try {
+        await cloudinary.uploader.destroy(question.imagePublicId);
+      } catch (err) {
+        console.error("Failed to delete Cloudinary image:", err.message);
+      }
     }
 
     await question.deleteOne();

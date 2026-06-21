@@ -18,7 +18,11 @@ const questionSchema = new mongoose.Schema(
       default: "",
     },
     image: {
-      type: String, // relative path, e.g. /uploads/16989999-photo.jpg
+      type: String, // full Cloudinary URL (secure_url), e.g. https://res.cloudinary.com/.../qa-app/abc123.jpg
+      default: "",
+    },
+    imagePublicId: {
+      type: String, // Cloudinary public_id, used to delete the image later
       default: "",
     },
     category: {
