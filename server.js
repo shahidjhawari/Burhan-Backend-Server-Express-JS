@@ -4,6 +4,7 @@ const cors = require("cors");
 const connectDB = require("./config/db");
 
 const questionRoutes = require("./routes/questionRoutes");
+const userRoutes = require("./routes/userRoutes");
 
 // Connect to MongoDB
 connectDB();
@@ -22,6 +23,7 @@ app.get("/", (req, res) => {
 
 // Routes
 app.use("/api", questionRoutes); // exposes /api/questions and /api/admin/questions
+app.use("/api/users", userRoutes); // exposes /api/users and /api/users/:id/progress
 
 // 404 handler
 app.use((req, res) => {
