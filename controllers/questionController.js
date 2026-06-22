@@ -1,85 +1,104 @@
 const cloudinary = require("../config/cloudinary");
 const Question = require("../models/Question");
 
-// @desc    Get all questions (supports ?category=&search=&page=&limit=)
-// @route   GET /api/questions
-// @access  Public (used by Android app and admin panel)
+// ---------- helpers ----------
+
+const destroyCloudinary = async (publicId, resourceType = "image") => {
+  if (!publicId) return;
+  try {
+    await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+  } catch (err) {
+    console.error("Cloudinary delete failed:", err.message);
+  }
+};
+
+const guessResourceType = (publicId = "") =>
+  publicId.endsWith(".pdf") || publicId.includes("/raw/") ? "raw" : "image";
+
+const buildEvidenceItems = (itemsJson, uploadedFiles, prefix) => {
+  let items = [];
+  try { items = JSON.parse(itemsJson || "[]"); } catch { items = []; }
+  return items.map((item, idx) => {
+    if (item.type === "image" || item.type === "pdf") {
+      const fieldName = `${prefix}_${idx}`;
+      const uploadedFile = uploadedFiles.find((f) => f.fieldname === fieldName);
+      if (uploadedFile) {
+        return { type: item.type, value: uploadedFile.path, publicId: uploadedFile.filename };
+      }
+      return { type: item.type, value: item.value || "", publicId: item.publicId || "" };
+    }
+    return { type: item.type, value: item.value || "" };
+  });
+};
+
+const destroyEvidenceItems = async (items = []) => {
+  for (const item of items) {
+    if (item.publicId && (item.type === "image" || item.type === "pdf")) {
+      await destroyCloudinary(item.publicId, guessResourceType(item.publicId));
+    }
+  }
+};
+
+const parseYoutubeVideos = (raw = "") => {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+  } catch {
+    return [raw].filter(Boolean);
+  }
+};
+
+// ---------- controllers ----------
+
 const getQuestions = async (req, res) => {
   try {
     const { category, search, page = 1, limit = 20 } = req.query;
-
     const filter = {};
     if (category) filter.category = category;
-    if (search) {
-      filter.$or = [
-        { question: { $regex: search, $options: "i" } },
-        { answer: { $regex: search, $options: "i" } },
-      ];
-    }
-
+    if (search) filter.$or = [
+      { question: { $regex: search, $options: "i" } },
+      { answer: { $regex: search, $options: "i" } },
+    ];
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
-
     const total = await Question.countDocuments(filter);
     const questions = await Question.find(filter)
       .sort({ createdAt: -1 })
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum);
-
-    res.json({
-      total,
-      page: pageNum,
-      pages: Math.ceil(total / limitNum) || 1,
-      data: questions,
-    });
+    res.json({ total, page: pageNum, pages: Math.ceil(total / limitNum) || 1, data: questions });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Server error while fetching questions" });
   }
 };
 
-// @desc    Get single question by id
-// @route   GET /api/questions/:id
-// @access  Public
 const getQuestionById = async (req, res) => {
   try {
     const question = await Question.findById(req.params.id);
-    if (!question) {
-      return res.status(404).json({ message: "Question not found" });
-    }
+    if (!question) return res.status(404).json({ message: "Question not found" });
     res.json(question);
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: "Server error while fetching question" });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-// @desc    Create a new question (with optional image)
-// @route   POST /api/admin/questions
-// @access  Public (no login)
 const createQuestion = async (req, res) => {
   try {
-    const { question, answer, reference, category } = req.body;
-
-    if (!question || !answer) {
-      return res.status(400).json({ message: "Question and answer fields are required" });
-    }
-
-    // multer-storage-cloudinary already uploaded the file to Cloudinary by
-    // this point. req.file.path is the full secure_url, req.file.filename
-    // is the public_id we need later to delete the image.
-    const image = req.file ? req.file.path : "";
-    const imagePublicId = req.file ? req.file.filename : "";
-
+    const { question, answer, category, scientificProofs, ahadees, youtubeVideos } = req.body;
+    if (!question || !answer) return res.status(400).json({ message: "Question and answer are required" });
+    const files = req.files || [];
+    const mainImageFile = files.find((f) => f.fieldname === "image");
     const newQuestion = await Question.create({
-      question,
-      answer,
-      reference,
-      category,
-      image,
-      imagePublicId,
+      question, answer, category,
+      image: mainImageFile ? mainImageFile.path : "",
+      imagePublicId: mainImageFile ? mainImageFile.filename : "",
+      scientificProofs: buildEvidenceItems(scientificProofs, files, "proof"),
+      ahadees: buildEvidenceItems(ahadees, files, "hadees"),
+      youtubeVideos: parseYoutubeVideos(youtubeVideos),
     });
-
     res.status(201).json(newQuestion);
   } catch (error) {
     console.error(error);
@@ -87,36 +106,38 @@ const createQuestion = async (req, res) => {
   }
 };
 
-// @desc    Update an existing question (optionally replace image)
-// @route   PUT /api/admin/questions/:id
-// @access  Public (no login)
 const updateQuestion = async (req, res) => {
   try {
     const existing = await Question.findById(req.params.id);
-    if (!existing) {
-      return res.status(404).json({ message: "Question not found" });
-    }
-
-    const { question, answer, reference, category } = req.body;
-
+    if (!existing) return res.status(404).json({ message: "Question not found" });
+    const { question, answer, category, scientificProofs, ahadees, youtubeVideos } = req.body;
+    const files = req.files || [];
     if (question !== undefined) existing.question = question;
     if (answer !== undefined) existing.answer = answer;
-    if (reference !== undefined) existing.reference = reference;
     if (category !== undefined) existing.category = category;
-
-    // If a new image was uploaded, delete the old one from Cloudinary first
-    if (req.file) {
-      if (existing.imagePublicId) {
-        try {
-          await cloudinary.uploader.destroy(existing.imagePublicId);
-        } catch (err) {
-          console.error("Failed to delete old Cloudinary image:", err.message);
-        }
-      }
-      existing.image = req.file.path;
-      existing.imagePublicId = req.file.filename;
+    const mainImageFile = files.find((f) => f.fieldname === "image");
+    if (mainImageFile) {
+      await destroyCloudinary(existing.imagePublicId, "image");
+      existing.image = mainImageFile.path;
+      existing.imagePublicId = mainImageFile.filename;
     }
-
+    if (scientificProofs !== undefined) {
+      const newProofs = buildEvidenceItems(scientificProofs, files, "proof");
+      for (const old of existing.scientificProofs) {
+        if (old.publicId && !newProofs.some((n) => n.publicId === old.publicId))
+          await destroyCloudinary(old.publicId, guessResourceType(old.publicId));
+      }
+      existing.scientificProofs = newProofs;
+    }
+    if (ahadees !== undefined) {
+      const newAh = buildEvidenceItems(ahadees, files, "hadees");
+      for (const old of existing.ahadees) {
+        if (old.publicId && !newAh.some((n) => n.publicId === old.publicId))
+          await destroyCloudinary(old.publicId, guessResourceType(old.publicId));
+      }
+      existing.ahadees = newAh;
+    }
+    if (youtubeVideos !== undefined) existing.youtubeVideos = parseYoutubeVideos(youtubeVideos);
     const updated = await existing.save();
     res.json(updated);
   } catch (error) {
@@ -125,24 +146,13 @@ const updateQuestion = async (req, res) => {
   }
 };
 
-// @desc    Delete a question
-// @route   DELETE /api/admin/questions/:id
-// @access  Public (no login)
 const deleteQuestion = async (req, res) => {
   try {
     const question = await Question.findById(req.params.id);
-    if (!question) {
-      return res.status(404).json({ message: "Question not found" });
-    }
-
-    if (question.imagePublicId) {
-      try {
-        await cloudinary.uploader.destroy(question.imagePublicId);
-      } catch (err) {
-        console.error("Failed to delete Cloudinary image:", err.message);
-      }
-    }
-
+    if (!question) return res.status(404).json({ message: "Question not found" });
+    await destroyCloudinary(question.imagePublicId, "image");
+    await destroyEvidenceItems(question.scientificProofs);
+    await destroyEvidenceItems(question.ahadees);
     await question.deleteOne();
     res.json({ message: "Question deleted successfully" });
   } catch (error) {
@@ -151,10 +161,4 @@ const deleteQuestion = async (req, res) => {
   }
 };
 
-module.exports = {
-  getQuestions,
-  getQuestionById,
-  createQuestion,
-  updateQuestion,
-  deleteQuestion,
-};
+module.exports = { getQuestions, getQuestionById, createQuestion, updateQuestion, deleteQuestion };

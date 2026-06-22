@@ -1,5 +1,62 @@
 const cloudinary = require("../config/cloudinary");
 const User = require("../models/User");
+const Question = require("../models/Question");
+const ReadProgress = require("../models/ReadProgress");
+
+// @desc    Get all user profiles, each with their reading progress
+//          (supports ?search=&page=&limit=)
+// @route   GET /api/users
+// @access  Public (used by the admin panel)
+const getUsers = async (req, res) => {
+  try {
+    const { search, page = 1, limit = 20 } = req.query;
+
+    const filter = {};
+    if (search) filter.name = { $regex: search, $options: "i" };
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+
+    const totalQuestions = await Question.countDocuments();
+    const total = await User.countDocuments(filter);
+    const users = await User.find(filter)
+      .sort({ createdAt: -1 })
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum);
+
+    const userIds = users.map((u) => u._id);
+    const readCounts = await ReadProgress.aggregate([
+      { $match: { user: { $in: userIds } } },
+      { $group: { _id: "$user", count: { $sum: 1 } } },
+    ]);
+    const countMap = {};
+    readCounts.forEach((c) => {
+      countMap[c._id.toString()] = c.count;
+    });
+
+    const data = users.map((u) => {
+      const readCount = countMap[u._id.toString()] || 0;
+      const percentage =
+        totalQuestions === 0 ? 0 : Math.min(100, Math.round((readCount / totalQuestions) * 100));
+      return {
+        ...u.toObject(),
+        readCount,
+        totalQuestions,
+        percentage,
+      };
+    });
+
+    res.json({
+      total,
+      page: pageNum,
+      pages: Math.ceil(total / limitNum) || 1,
+      data,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error while fetching users" });
+  }
+};
 
 // @desc    Create a new user profile (with optional image)
 // @route   POST /api/users
@@ -76,4 +133,32 @@ const updateUser = async (req, res) => {
   }
 };
 
-module.exports = { createUser, getUser, updateUser };
+// @desc    Delete a user profile
+// @route   DELETE /api/users/:id
+// @access  Public (used by the admin panel)
+const deleteUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.imagePublicId) {
+      try {
+        await cloudinary.uploader.destroy(user.imagePublicId);
+      } catch (err) {
+        console.error("Failed to delete profile image:", err.message);
+      }
+    }
+
+    await ReadProgress.deleteMany({ user: user._id });
+    await user.deleteOne();
+
+    res.json({ message: "User deleted successfully" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error while deleting user" });
+  }
+};
+
+module.exports = { getUsers, createUser, getUser, updateUser, deleteUser };

@@ -2,20 +2,23 @@ const multer = require("multer");
 const { CloudinaryStorage } = require("multer-storage-cloudinary");
 const cloudinary = require("../config/cloudinary");
 
-// Images are uploaded directly to Cloudinary (folder: "qa-app") instead of
-// being saved on the server's local disk.
+// General-purpose uploader for question media (images AND PDFs).
+// resource_type:"auto" lets Cloudinary auto-detect whether the file is an
+// image, video, or raw document (PDF).
 const storage = new CloudinaryStorage({
   cloudinary,
-  params: {
-    folder: "qa-app",
-    allowed_formats: ["jpg", "jpeg", "png", "gif", "webp"],
-    transformation: [{ width: 1200, height: 1200, crop: "limit" }], // avoid huge uploads
-  },
+  params: (req, file) => ({
+    folder: "qa-app/media",
+    resource_type: "auto",
+    allowed_formats: ["jpg", "jpeg", "png", "gif", "webp", "pdf"],
+  }),
 });
 
+// Using upload.any() on the question routes so we can dynamically handle
+// proof_0, proof_1, hadees_0, hadees_1 … etc. alongside the main image.
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB max
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB (generous for PDFs)
 });
 
 module.exports = upload;

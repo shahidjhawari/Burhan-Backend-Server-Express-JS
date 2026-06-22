@@ -5,6 +5,7 @@ const connectDB = require("./config/db");
 
 const questionRoutes = require("./routes/questionRoutes");
 const userRoutes = require("./routes/userRoutes");
+const authRoutes = require("./routes/authRoutes");
 
 // Connect to MongoDB
 connectDB();
@@ -22,8 +23,9 @@ app.get("/", (req, res) => {
 });
 
 // Routes
-app.use("/api", questionRoutes); // exposes /api/questions and /api/admin/questions
-app.use("/api/users", userRoutes); // exposes /api/users and /api/users/:id/progress
+app.use("/api", questionRoutes);        // /api/questions  /api/admin/questions
+app.use("/api/users", userRoutes);      // /api/users  /api/users/:id/progress
+app.use("/api/auth", authRoutes);       // /api/auth/signup  /api/auth/login  /api/auth/me
 
 // 404 handler
 app.use((req, res) => {
