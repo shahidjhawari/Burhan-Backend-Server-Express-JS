@@ -34,6 +34,10 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    fcmToken: {
+      type: String,  // Firebase Cloud Messaging device token — updated by the app on each login
+      default: "",
+    },
   },
   { timestamps: true }
 );
