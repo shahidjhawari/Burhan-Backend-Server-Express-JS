@@ -20,14 +20,29 @@ const userSchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
+    bio: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     password: {
       type: String,
-      required: [true, "Password is required"],
       minlength: 6,
-      select: false, // never return password in queries by default
+      select: false,
+      // NOT required — Google users have no password
+    },
+    googleId: {
+      type: String,
+      default: "",
+      index: true,
+    },
+    authProvider: {
+      type: String,
+      enum: ["email", "google"],
+      default: "email",
     },
     image: {
-      type: String, // full Cloudinary URL
+      type: String,
       default: "",
     },
     imagePublicId: {
@@ -35,23 +50,23 @@ const userSchema = new mongoose.Schema(
       default: "",
     },
     fcmToken: {
-      type: String,  // Firebase Cloud Messaging device token — updated by the app on each login
+      type: String,
       default: "",
     },
   },
   { timestamps: true }
 );
 
-// Hash password before saving
+// Hash password before saving (only if password is set — Google users skip this)
 userSchema.pre("save", async function (next) {
-  if (!this.isModified("password")) return next();
+  if (!this.isModified("password") || !this.password) return next();
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
   next();
 });
 
-// Compare entered password with hashed
 userSchema.methods.matchPassword = async function (enteredPassword) {
+  if (!this.password) return false; // Google-only account
   return bcrypt.compare(enteredPassword, this.password);
 };
 
