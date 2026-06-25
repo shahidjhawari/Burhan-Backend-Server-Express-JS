@@ -5,7 +5,7 @@ const mongoose = require("mongoose");
 //  - "text"  -> value holds plain text
 //  - "url"   -> value holds a web link
 //  - "image" -> value holds a Cloudinary image URL, publicId set
-//  - "pdf"   -> value holds a Cloudinary file URL, publicId set
+//  - "pdf"   -> value holds a Cloudinary file URL, publicId set gfghfg
 const evidenceItemSchema = new mongoose.Schema(
   {
     type: {
