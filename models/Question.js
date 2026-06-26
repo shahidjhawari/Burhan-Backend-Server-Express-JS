@@ -1,11 +1,5 @@
 const mongoose = require("mongoose");
 
-// Reusable shape for one "evidence" item inside Scientific Proof or
-// Ahadees. `type` decides how the app should render it:
-//  - "text"  -> value holds plain text
-//  - "url"   -> value holds a web link
-//  - "image" -> value holds a Cloudinary image URL, publicId set
-//  - "pdf"   -> value holds a Cloudinary file URL, publicId set
 const evidenceItemSchema = new mongoose.Schema(
   {
     type: {
@@ -13,61 +7,66 @@ const evidenceItemSchema = new mongoose.Schema(
       enum: ["text", "url", "image", "pdf"],
       required: true,
     },
-    value: {
-      type: String, // text content, a URL, or a Cloudinary file URL depending on `type`
-      required: true,
-    },
-    publicId: {
-      type: String, // Cloudinary public_id (only set for image/pdf), used to delete later
-      default: "",
-    },
+    value: { type: String, required: true },
+    publicId: { type: String, default: "" },
+    // PDF first-page thumbnail (Cloudinary transformation URL)
+    thumbnailUrl: { type: String, default: "" },
   },
   { _id: true }
 );
 
 const questionSchema = new mongoose.Schema(
   {
-    question: {
+    // ── Existing fields (unchanged) ──
+    question:       { type: String, required: [true, "Question is required"], trim: true },
+    answer:         { type: String, required: [true, "Answer is required"], trim: true },
+    image:          { type: String, default: "" },
+    imagePublicId:  { type: String, default: "" },
+    category:       { type: String, trim: true, default: "General" },
+    scientificProofs: { type: [evidenceItemSchema], default: [] },
+    ahadees:          { type: [evidenceItemSchema], default: [] },
+    youtubeVideos:    { type: [String], default: [] },
+
+    // ── NEW fields — all optional, backward compatible ──
+    language: {
       type: String,
-      required: [true, "Question text is required"],
-      trim: true,
+      enum: ["en", "ur", "ar"],
+      default: "en",
     },
-    answer: {
-      type: String,
-      required: [true, "Answer text is required"],
-      trim: true,
-    },
-    image: {
-      type: String, // full Cloudinary URL — the question's own illustrative photo
-      default: "",
-    },
-    imagePublicId: {
-      type: String,
-      default: "",
-    },
-    category: {
-      type: String,
-      trim: true,
-      default: "General",
-    },
-    // Each question can have any number of scientific-proof items, each
-    // independently a PDF, image, URL, or plain text.
-    scientificProofs: {
-      type: [evidenceItemSchema],
-      default: [],
-    },
-    // Same idea, for hadith references.
-    ahadees: {
-      type: [evidenceItemSchema],
-      default: [],
-    },
-    // Any number of related YouTube links.
-    youtubeVideos: {
+    // Islamic tags for grouping: ["namaz", "salah", "prayer", "ibadah"]
+    tags: {
       type: [String],
+      default: [],
+      set: (arr) => arr.map((t) => t.trim().toLowerCase()).filter(Boolean),
+    },
+    // Search keywords: ["importance", "farz", "worship"]
+    keywords: {
+      type: [String],
+      default: [],
+      set: (arr) => arr.map((k) => k.trim().toLowerCase()).filter(Boolean),
+    },
+    // Admin-selected related questions (ObjectId refs)
+    relatedQuestions: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Question" }],
       default: [],
     },
   },
   { timestamps: true }
 );
+
+// Full-text index with weights — language:"none" so Urdu/Arabic also works
+questionSchema.index(
+  { question: "text", answer: "text", tags: "text", keywords: "text", category: "text" },
+  {
+    weights: { question: 10, keywords: 6, tags: 4, category: 2, answer: 1 },
+    name: "question_text_search",
+    default_language: "none",
+  }
+);
+
+// Indexes for fast related-question and category lookup
+questionSchema.index({ tags: 1, category: 1 });
+questionSchema.index({ keywords: 1 });
+questionSchema.index({ language: 1 });
 
 module.exports = mongoose.model("Question", questionSchema);
