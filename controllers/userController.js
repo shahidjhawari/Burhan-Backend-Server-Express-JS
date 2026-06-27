@@ -25,24 +25,27 @@ const getUsers = async (req, res) => {
       .limit(limitNum);
 
     const userIds = users.map((u) => u._id);
-    const readCounts = await ReadProgress.aggregate([
-      { $match: { user: { $in: userIds } } },
+
+    // Completed questions count per user (only completed=true rows)
+    const completedCounts = await ReadProgress.aggregate([
+      { $match: { user: { $in: userIds }, completed: true } },
       { $group: { _id: "$user", count: { $sum: 1 } } },
     ]);
-    const countMap = {};
-    readCounts.forEach((c) => {
-      countMap[c._id.toString()] = c.count;
-    });
+    const completedMap = {};
+    completedCounts.forEach((c) => { completedMap[c._id.toString()] = c.count; });
 
     const data = users.map((u) => {
-      const readCount = countMap[u._id.toString()] || 0;
-      const percentage =
-        totalQuestions === 0 ? 0 : Math.min(100, Math.round((readCount / totalQuestions) * 100));
+      const completedCount = completedMap[u._id.toString()] || 0;
+      const percentage = totalQuestions === 0
+        ? 0
+        : Math.min(100, Math.round((completedCount / totalQuestions) * 100));
       return {
         ...u.toObject(),
-        readCount,
+        readCount: completedCount,  // backward compat key
+        completedCount,
         totalQuestions,
         percentage,
+        // xp, level, title already in user document
       };
     });
 

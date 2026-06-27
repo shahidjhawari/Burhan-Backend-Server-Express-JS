@@ -1,5 +1,10 @@
 const mongoose = require("mongoose");
 
+/**
+ * Tracks per-user, per-question reading/completion state.
+ * One document per (user, question) pair — enforced by unique index.
+ * Replaces the old minimal schema while staying fully backward compatible.
+ */
 const readProgressSchema = new mongoose.Schema(
   {
     user: {
@@ -16,11 +21,29 @@ const readProgressSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+
+    // ── Learning Progress fields ──
+    completed: {
+      type: Boolean,
+      default: false,
+      // true = user reached end of answer (XP has been awarded)
+    },
+    xpEarned: {
+      type: Number,
+      default: 0,
+      // 0 until completed; 10 after first completion (never increases again)
+    },
+    completedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );
 
-// A user can mark the same question as read only once (prevents duplicate counting)
+// Unique per user+question — prevents duplicate XP at the database level
 readProgressSchema.index({ user: 1, question: 1 }, { unique: true });
+// Fast lookup: all completed questions for a user
+readProgressSchema.index({ user: 1, completed: 1 });
 
 module.exports = mongoose.model("ReadProgress", readProgressSchema);

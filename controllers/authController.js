@@ -7,15 +7,19 @@ const generateToken = (id) =>
   jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || "30d" });
 
 const safeUser = (user) => ({
-  _id: user._id,
-  name: user.name,
-  email: user.email,
-  phone: user.phone,
-  bio: user.bio || "",
-  image: user.image,
-  authProvider: user.authProvider,
-  createdAt: user.createdAt,
-  updatedAt: user.updatedAt,
+  _id:                user._id,
+  name:               user.name,
+  email:              user.email,
+  phone:              user.phone,
+  bio:                user.bio || "",
+  image:              user.image,
+  authProvider:       user.authProvider,
+  xp:                 user.xp   || 0,
+  level:              user.level || 1,
+  title:              user.title || "طالبِ علم",
+  totalQuestionsRead: user.totalQuestionsRead || 0,
+  createdAt:          user.createdAt,
+  updatedAt:          user.updatedAt,
 });
 
 // ──────────────────────────────────────────────────────────────

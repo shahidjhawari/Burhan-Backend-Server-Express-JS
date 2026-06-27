@@ -53,6 +53,28 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+
+    // ── Learning Progress (Learning Progress System) ──
+    xp: {
+      type: Number,
+      default: 0,
+      min: 0,
+      index: true,
+    },
+    level: {
+      type: Number,
+      default: 1,
+      min: 1,
+    },
+    title: {
+      type: String,
+      default: "طالبِ علم",
+    },
+    totalQuestionsRead: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   { timestamps: true }
 );
