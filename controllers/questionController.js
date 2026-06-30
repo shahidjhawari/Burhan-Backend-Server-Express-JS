@@ -62,6 +62,15 @@ const parseArray = (raw) => {
   }
 };
 
+const parseQuotes = (raw) => {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.filter((q) => q && q.text);
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((q) => q && q.text) : [];
+  } catch { return []; }
+};
+
 // ── GET /api/questions ───────────────────────────────────────────────────────
 const getQuestions = async (req, res) => {
   try {
@@ -243,6 +252,7 @@ const createQuestion = async (req, res) => {
       question, answer, category, language,
       scientificProofs, ahadees, youtubeVideos,
       tags, keywords, relatedQuestions,
+      richText, notes, references, quotes,
     } = req.body;
 
     if (!question || !answer) return res.status(400).json({ message: "Question and answer are required" });
@@ -260,6 +270,10 @@ const createQuestion = async (req, res) => {
       tags:             parseArray(tags),
       keywords:         parseArray(keywords),
       relatedQuestions: parseArray(relatedQuestions),
+      richText:    richText    || "",
+      notes:       notes       || "",
+      references:  parseArray(references),
+      quotes:      parseQuotes(quotes),
     });
 
     res.status(201).json(newQuestion);
@@ -279,6 +293,7 @@ const updateQuestion = async (req, res) => {
       question, answer, category, language,
       scientificProofs, ahadees, youtubeVideos,
       tags, keywords, relatedQuestions,
+      richText, notes, references, quotes,
     } = req.body;
     const files = req.files || [];
 
@@ -314,6 +329,10 @@ const updateQuestion = async (req, res) => {
       existing.ahadees = newAh;
     }
     if (youtubeVideos !== undefined) existing.youtubeVideos = parseArray(youtubeVideos);
+    if (richText    !== undefined) existing.richText    = richText;
+    if (notes       !== undefined) existing.notes       = notes;
+    if (references  !== undefined) existing.references  = parseArray(references);
+    if (quotes      !== undefined) existing.quotes      = parseQuotes(quotes);
 
     const updated = await existing.save();
     res.json(updated);

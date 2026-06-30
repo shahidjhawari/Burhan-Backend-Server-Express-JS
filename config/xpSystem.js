@@ -3,7 +3,26 @@
  * Centralised XP / Level / Title logic — import everywhere needed.
  */
 
-const XP_PER_QUESTION = 10;
+const XP_PER_QUESTION = 10;  // bonus XP when ALL content items are completed
+
+// ── Per-content-type XP (awarded ONCE per item per user) ─────────────────────
+const CONTENT_XP = {
+  text:     5,   // reading the main rich text of a question
+  image:    2,   // viewing each image
+  pdf:      5,   // opening each PDF and spending minimum time
+  url:      3,   // visiting each external URL
+  video:    10,  // watching each YouTube video to minimum watch %
+  question: 10,  // bonus for completing ALL items in a question
+};
+
+// Minimum watch percentage to earn video XP (80%)
+const MIN_VIDEO_WATCH_PERCENT = 80;
+
+// Minimum seconds to earn PDF XP (30 seconds)
+const MIN_PDF_TIME_SECONDS = 30;
+
+// Minimum seconds to earn URL XP (10 seconds)
+const MIN_URL_TIME_SECONDS = 10;
 
 // Scalable level formula: Level = floor(sqrt(xp / 50)) + 1
 // xp 0   → L1  | xp 50   → L2  | xp 200  → L3
@@ -69,6 +88,10 @@ const didTitleChange = (oldXp, newXp) =>
 
 module.exports = {
   XP_PER_QUESTION,
+  CONTENT_XP,
+  MIN_VIDEO_WATCH_PERCENT,
+  MIN_PDF_TIME_SECONDS,
+  MIN_URL_TIME_SECONDS,
   getLevel,
   xpForLevel,
   getTitle,

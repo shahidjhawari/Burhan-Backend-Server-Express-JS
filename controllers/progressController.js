@@ -8,6 +8,8 @@ const {
   didTitleChange,
   xpForLevel,
   getNextTitle,
+  getLevel,
+  getTitle,
   TITLES,
 } = require("../config/xpSystem");
 
@@ -271,4 +273,297 @@ module.exports = {
   getUserProgress,
   getUserStats,
   getUserProfile,
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RICH CONTENT PROGRESS (granular per-item XP tracking)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const ContentProgress = require("../models/ContentProgress");
+const {
+  CONTENT_XP,
+  MIN_VIDEO_WATCH_PERCENT,
+  MIN_PDF_TIME_SECONDS,
+  MIN_URL_TIME_SECONDS,
+} = require("../config/xpSystem");
+
+/**
+ * Core helper: try to award XP for one content item.
+ * Returns { xpAwarded, alreadyCompleted, doc }
+ *
+ * Safe to call concurrently — upsert + conditional update prevents duplication.
+ */
+const awardContentXp = async ({
+  userId, questionId, contentType, contentId = "main",
+  timeSpentSeconds = 0, watchPercent = 0,
+}) => {
+  // Check if already completed
+  const existing = await ContentProgress.findOne({
+    user: userId, question: questionId, contentType, contentId,
+  });
+
+  if (existing?.completed) {
+    // Already done — update time/watchPercent but award NO more XP
+    if (watchPercent > (existing.watchPercent || 0) || timeSpentSeconds > (existing.timeSpentSeconds || 0)) {
+      existing.watchPercent     = Math.max(existing.watchPercent, watchPercent);
+      existing.timeSpentSeconds = Math.max(existing.timeSpentSeconds, timeSpentSeconds);
+      await existing.save();
+    }
+    return { xpAwarded: 0, alreadyCompleted: true, doc: existing };
+  }
+
+  const xpAmount = CONTENT_XP[contentType] || 0;
+
+  let doc;
+  if (existing) {
+    existing.completed        = true;
+    existing.xpEarned         = xpAmount;
+    existing.completedAt      = new Date();
+    existing.timeSpentSeconds = Math.max(existing.timeSpentSeconds || 0, timeSpentSeconds);
+    existing.watchPercent     = Math.max(existing.watchPercent || 0, watchPercent);
+    doc = await existing.save();
+  } else {
+    doc = await ContentProgress.create({
+      user: userId, question: questionId,
+      contentType, contentId,
+      completed: true, xpEarned: xpAmount,
+      completedAt: new Date(),
+      timeSpentSeconds, watchPercent,
+    });
+  }
+
+  // Apply XP to user (atomic $inc to avoid race conditions)
+  const oldUser = await User.findByIdAndUpdate(
+    userId,
+    { $inc: { xp: xpAmount } },
+    { new: false } // get OLD value to check title change
+  );
+  const newXp  = (oldUser.xp || 0) + xpAmount;
+  const newUser = await User.findByIdAndUpdate(
+    userId,
+    { level: getLevel(newXp), title: getTitle(newXp) },
+    { new: true }
+  );
+
+  return {
+    xpAwarded: xpAmount,
+    alreadyCompleted: false,
+    titleChanged: didTitleChange(oldUser.xp || 0, newXp),
+    newTitle: newUser.title,
+    oldTitle: oldUser.title,
+    doc,
+  };
+};
+
+/**
+ * Build a detailed per-question content progress summary for a user.
+ * Returns which items are done and the overall completion percentage.
+ */
+const buildContentSummary = async (userId, questionId) => {
+  const [question, contentDocs] = await Promise.all([
+    Question.findById(questionId).select(
+      "scientificProofs ahadees youtubeVideos richText notes quotes references"
+    ),
+    ContentProgress.find({ user: userId, question: questionId }),
+  ]);
+
+  if (!question) return null;
+
+  const completedMap = {};
+  let totalXpEarned = 0;
+  for (const d of contentDocs) {
+    const key = `${d.contentType}:${d.contentId}`;
+    completedMap[key] = { completed: d.completed, xpEarned: d.xpEarned, watchPercent: d.watchPercent };
+    if (d.completed) totalXpEarned += d.xpEarned;
+  }
+
+  const isItemDone = (type, id) => completedMap[`${type}:${id}`]?.completed === true;
+
+  // Collect all trackable items from the question
+  const items = [];
+
+  // Main text (richText or answer)
+  if (question.richText || true) {
+    items.push({ type: "text",  id: "main", done: isItemDone("text",  "main") });
+  }
+
+  // Images from scientificProofs
+  for (const p of question.scientificProofs || []) {
+    if (p.type === "image") items.push({ type: "image", id: p._id.toString(), done: isItemDone("image", p._id.toString()) });
+    if (p.type === "pdf")   items.push({ type: "pdf",   id: p._id.toString(), done: isItemDone("pdf",   p._id.toString()) });
+    if (p.type === "url")   items.push({ type: "url",   id: p._id.toString(), done: isItemDone("url",   p._id.toString()) });
+  }
+
+  // Same for ahadees
+  for (const a of question.ahadees || []) {
+    if (a.type === "image") items.push({ type: "image", id: a._id.toString(), done: isItemDone("image", a._id.toString()) });
+    if (a.type === "pdf")   items.push({ type: "pdf",   id: a._id.toString(), done: isItemDone("pdf",   a._id.toString()) });
+    if (a.type === "url")   items.push({ type: "url",   id: a._id.toString(), done: isItemDone("url",   a._id.toString()) });
+  }
+
+  // YouTube videos
+  (question.youtubeVideos || []).forEach((_, i) => {
+    items.push({ type: "video", id: String(i), done: isItemDone("video", String(i)), watchPercent: completedMap[`video:${i}`]?.watchPercent || 0 });
+  });
+
+  const doneCount  = items.filter((i) => i.done).length;
+  const totalCount = items.length;
+  const contentPct = totalCount === 0 ? 100 : Math.round((doneCount / totalCount) * 100);
+  const allDone    = doneCount === totalCount && totalCount > 0;
+
+  return {
+    items,
+    doneCount,
+    totalCount,
+    contentCompletionPercent: contentPct,
+    allContentCompleted: allDone,
+    totalXpEarned,
+  };
+};
+
+// ─── POST /api/users/:userId/content/:questionId/text ────────────────────────
+// User finished reading the main text/answer
+const completeTextContent = async (req, res) => {
+  try {
+    const { userId, questionId } = req.params;
+    if (!validateIds(userId, questionId)) return res.status(400).json({ message: "Invalid ids" });
+
+    const result = await awardContentXp({ userId, questionId, contentType: "text", contentId: "main" });
+    const summary = await buildContentSummary(userId, questionId);
+    res.json({ ...result, summary });
+  } catch (err) {
+    console.error("completeTextContent:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ─── POST /api/users/:userId/content/:questionId/image/:itemId ───────────────
+const completeImageContent = async (req, res) => {
+  try {
+    const { userId, questionId, itemId } = req.params;
+    const result = await awardContentXp({ userId, questionId, contentType: "image", contentId: itemId });
+    const summary = await buildContentSummary(userId, questionId);
+    res.json({ ...result, summary });
+  } catch (err) {
+    console.error("completeImageContent:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ─── POST /api/users/:userId/content/:questionId/pdf/:itemId ─────────────────
+// Body (JSON): { timeSpentSeconds }
+const completePdfContent = async (req, res) => {
+  try {
+    const { userId, questionId, itemId } = req.params;
+    const timeSpentSeconds = parseInt(req.body.timeSpentSeconds, 10) || 0;
+
+    if (timeSpentSeconds < MIN_PDF_TIME_SECONDS) {
+      return res.status(200).json({
+        xpAwarded: 0,
+        alreadyCompleted: false,
+        pending: true,
+        message: `Keep reading — ${MIN_PDF_TIME_SECONDS - timeSpentSeconds}s remaining to earn PDF XP`,
+      });
+    }
+
+    const result = await awardContentXp({
+      userId, questionId, contentType: "pdf",
+      contentId: itemId, timeSpentSeconds,
+    });
+    const summary = await buildContentSummary(userId, questionId);
+    res.json({ ...result, summary });
+  } catch (err) {
+    console.error("completePdfContent:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ─── POST /api/users/:userId/content/:questionId/url/:itemId ─────────────────
+// Body (JSON): { timeSpentSeconds }
+const completeUrlContent = async (req, res) => {
+  try {
+    const { userId, questionId, itemId } = req.params;
+    const timeSpentSeconds = parseInt(req.body.timeSpentSeconds, 10) || 0;
+
+    if (timeSpentSeconds < MIN_URL_TIME_SECONDS) {
+      return res.status(200).json({
+        xpAwarded: 0, alreadyCompleted: false, pending: true,
+        message: `Spend at least ${MIN_URL_TIME_SECONDS}s on the URL to earn XP`,
+      });
+    }
+
+    const result = await awardContentXp({
+      userId, questionId, contentType: "url",
+      contentId: itemId, timeSpentSeconds,
+    });
+    const summary = await buildContentSummary(userId, questionId);
+    res.json({ ...result, summary });
+  } catch (err) {
+    console.error("completeUrlContent:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ─── POST /api/users/:userId/content/:questionId/video/:videoIndex ───────────
+// Body (JSON): { watchPercent }  (0-100)
+const completeVideoContent = async (req, res) => {
+  try {
+    const { userId, questionId, videoIndex } = req.params;
+    const watchPercent = parseFloat(req.body.watchPercent) || 0;
+
+    // Update watch progress even if threshold not reached yet
+    await ContentProgress.findOneAndUpdate(
+      { user: userId, question: questionId, contentType: "video", contentId: String(videoIndex) },
+      { $max: { watchPercent }, $setOnInsert: { user: userId, question: questionId, contentType: "video", contentId: String(videoIndex) } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    if (watchPercent < MIN_VIDEO_WATCH_PERCENT) {
+      return res.status(200).json({
+        xpAwarded: 0, alreadyCompleted: false, pending: true,
+        watchPercent,
+        message: `Watch ${MIN_VIDEO_WATCH_PERCENT}% to earn XP (currently ${Math.round(watchPercent)}%)`,
+      });
+    }
+
+    const result = await awardContentXp({
+      userId, questionId, contentType: "video",
+      contentId: String(videoIndex), watchPercent,
+    });
+    const summary = await buildContentSummary(userId, questionId);
+    res.json({ ...result, summary });
+  } catch (err) {
+    console.error("completeVideoContent:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ─── GET /api/users/:userId/content/:questionId ──────────────────────────────
+// Returns per-item progress for a specific question
+const getContentProgress = async (req, res) => {
+  try {
+    const { userId, questionId } = req.params;
+    if (!validateIds(userId, questionId)) return res.status(400).json({ message: "Invalid ids" });
+    const summary = await buildContentSummary(userId, questionId);
+    if (!summary) return res.status(404).json({ message: "Question not found" });
+    res.json(summary);
+  } catch (err) {
+    console.error("getContentProgress:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+module.exports = {
+  markQuestionAsRead,
+  completeQuestion,
+  getUserProgress,
+  getUserStats,
+  getUserProfile,
+  // Content progress exports
+  completeTextContent,
+  completeImageContent,
+  completePdfContent,
+  completeUrlContent,
+  completeVideoContent,
+  getContentProgress,
 };

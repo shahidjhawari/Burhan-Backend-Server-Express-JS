@@ -50,6 +50,28 @@ const questionSchema = new mongoose.Schema(
       type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Question" }],
       default: [],
     },
+
+    // ── Rich Content Fields ────────────────────────────────────────────────────
+    // Long-form HTML rich text (the main detailed explanation beyond `answer`)
+    richText: {
+      type: String,
+      default: "",
+    },
+    // Scholarly references, citations, book names, hadith collections etc.
+    references: {
+      type: [String],
+      default: [],
+    },
+    // Editor's notes, footnotes, additional context
+    notes: {
+      type: String,
+      default: "",
+    },
+    // Notable quotes or sayings related to this question
+    quotes: {
+      type: [{ text: String, source: String }],
+      default: [],
+    },
   },
   { timestamps: true }
 );
